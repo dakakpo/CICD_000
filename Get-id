@@ -1,0 +1,25 @@
+import boto3
+
+# Initialize a boto3 client for AWS Glue
+glue_client = boto3.client('glue', region_name='your-region')
+
+# Specify the name of the AWS Glue job you're interested in
+job_name = 'your-glue-job-name'
+
+# Retrieve the job runs for the specified job
+response = glue_client.get_job_runs(JobName=job_name, MaxResults=1)
+
+# Assuming you want the most recent job run
+if response['JobRuns']:
+    latest_job_run = response['JobRuns'][0]  # The most recent run is the first item
+    
+    # Extract the required details
+    batch_id = latest_job_run['Id']
+    job_name = latest_job_run['JobName']
+    start_time = latest_job_run['StartedOn']
+    
+    print(f"Batch ID: {batch_id}")
+    print(f"Job Name: {job_name}")
+    print(f"Start Time: {start_time}")
+else:
+    print("No runs found for the specified job.")
