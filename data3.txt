@@ -1,0 +1,40 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import lit, current_date, date_sub
+from datetime import datetime
+
+# Initialize Spark Session
+spark = SparkSession.builder.appName("Update Contract Table").getOrCreate()
+
+# Example DataFrame loading (replace with your actual DataFrames)
+# tidcnmst = spark.read...
+# contract = spark.read...
+
+# Define the conditions for insert and modify (this is a placeholder, you need to define these based on your logic)
+# Example: cond_insert = (col("someColumn") == "someValue")
+# Example: cond_mod = (col("someColumn") != "someValue" and col("otherColumn") == "otherValue")
+
+# Process new records
+new_records = tidcnmst.filter(cond_insert).withColumn("eff_strt_dttm", current_date()) \
+                      .withColumn("eff_end_dttm", lit("9999-12-31"))
+
+# Process modified records
+modified_records = tidcnmst.filter(cond_mod)
+
+# For modified records, first set the eff_end_dttm of the existing record to yesterday
+# Assuming 'id' is the unique identifier for matching records
+contract = contract.join(modified_records, "id", "left_outer") \
+                   .withColumn("eff_end_dttm", when(col("id").isNotNull(), date_sub(current_date(), 1)) \
+                   .otherwise(col("eff_end_dttm")))
+
+# Then add the modified record with the new dates
+modified_new_version = modified_records.withColumn("eff_strt_dttm", current_date()) \
+                                       .withColumn("eff_end_dttm", lit("9999-12-31"))
+
+# Union the new and modified records with the updated contract table
+updated_contract = contract.unionByName(new_records).unionByName(modified_new_version)
+
+# Show result (for debugging)
+updated_contract.show()
+
+# Save or overwrite the updated contract DataFrame as needed
+# updated_contract.write...
