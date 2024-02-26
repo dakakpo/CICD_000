@@ -1,0 +1,110 @@
+#Define the paths to your data stored in S3
+path_to_tidcnmst = "s3://2env-edp-raw-generations-en411-s3/landing/nuc/poclanding/tidcnmst/"
+
+# Read tidcnmst_df, tidcnreq_df, and contract_df
+tidcnmst_df = spark.read.format("delta").load(path_to_tidcnmst)
+
+from pyspark.sql.functions import col, trim
+
+def trim_and_rename(df):
+    return df.select(
+        trim(col("contract_id")).alias("cntrct_id"),
+        trim(col("contract_release")).alias("cntrct_reles_nbr"),
+        trim(col("contr_requisition")).alias("cntrct_reqstn_nbr"),
+        trim(col("address_code_bill")).alias("addr_bill_cd"),
+        trim(col("address_code")).alias("addr_cd")
+    )
+
+# Apply the function
+trimmed_renamed_tidcnmst = trim_and_rename(tidcnmst)
+
+trimmed_renamed_tidcnmst.show()
+#LOAD records into S3 TRANSFORMED folder for the table
+path_to_trimmed_renamed_tidcnmst = "s3://2env-edp-raw-generations-en411-s3/landing/nuc/pocprocessed/tidcnmst/"
+trimmed_renamed_tidcnmst.write.format("delta").mode("overwrite").option("mergeSchema", "true")\
+.save(path_to_trimmed_renamed_tidcnmst)
+# if error due to bad data, then MOVE existing records from wam_nuc.etl_wam_reject_record_log INTO wam_nuc.etl_wam_reject_record_archive;   
+#INSERT reject record into wam_nuc.etl_wam_reject_record_log table and CONTINUE processing the other records
+#load contract table from redshift
+contractDF = spark.read \
+    .format("jdbc") \
+    .option("url", "jdbc:redshift://redshift-edp-dev.czvsewxs0afi.us-east-1.redshift.amazonaws.com:5617/edpdev") \
+    .option("dbtable", "wam_nuc.contract_tmp1_zzz0edpnuc") \
+    .option("user", username) \
+    .option("password", password) \
+    .load()
+
+contractDF.show()
+# Load the contract table
+path_to_contract = "s3://2env-edp-raw-generations-en411-s3/landing/nuc/pocprocessed/contract/"
+#contractDF.write.format("delta").mode("overwrite").option("mergeSchema", "true")\
+#.save(path_to_contract)
+#contract = spark.read.format("delta").load(path_to_contract)
+# find if they are new records or updated records 
+
+
+# Create a temporary view for both DataFrames
+trimmed_renamed_tidcnmst.createOrReplaceTempView("tidcnmst")
+contractDF.createOrReplaceTempView("contract")
+
+# SQL query to find new records
+query = """
+SELECT t.*
+FROM tidcnmst t
+LEFT JOIN contract c
+ON t.cntrct_id = c.cntrct_id AND t.cntrct_reles_nbr = c.cntrct_reles_nbr
+WHERE c.cntrct_id IS NULL
+"""
+
+# Execute the query
+new_records_tidcnmst = spark.sql(query)
+
+# Now new_records DataFrame contains the new records from tidcnmst that are not in contract
+
+new_records_tidcnmst.show()
+updated_records#insert new records to contract
+
+new_records = new_records_tidcnmst.withColumn("eff_strt_dttm", current_date()) \
+                         .withColumn("eff_end_dttm", to_date(lit("9999-12-31")))
+
+new_records.write.format("delta").mode("append").option("mergeSchema", "true").save(path_to_contract)
+
+#new_records.show(5)
+contract = spark.read.format("delta").load(path_to_contract)
+contract.show(5)
+#read delta and write it to parquet format 
+path_to_contract_final = "s3://2env-edp-raw-generations-en411-s3/landing/nuc/pocprocessed/contract_final/"
+contract.write.mode("overwrite").parquet(path_to_contract_final)
+contract_final = spark.read.parquet(path_to_contract)
+contract_final.show(5)
+from awsglue.dynamicframe import DynamicFrame
+
+# Assuming df is your DataFrame
+contract_final_dyf = DynamicFrame.fromDF(contract_final, glueContext, "contract_final_dyf")
+# Define pre-actions
+pre_actions = """DELETE FROM wam_nuc.contract_tmp1_zzz0edpnuc WHERE 1=1"""
+
+# Write DynamicFrame to Redshift
+contract_Final = glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=contract_final_dyf,
+    catalog_connection="2env-en411-nuc--redshift-conn",
+    connection_options={
+        "dbtable": "wam_nuc.contract_tmp1_zzz0edpnuc",
+        "database": "edpdev",
+        "preactions": pre_actions
+    },
+    redshift_tmp_dir="s3://2env-edp-raw-generations-en411-s3/landing/nuc/path/temp/",
+    transformation_ctx="contract_Final")
+# read wam_nuc_log_job_control
+
+#load contract table from redshift
+wam_nuc_log_job_controlDF = spark.read \
+    .format("jdbc") \
+    .option("url", "jdbc:redshift://redshift-edp-dev.czvsewxs0afi.us-east-1.redshift.amazonaws.com:5617/edpdev") \
+    .option("dbtable", "wam_audit.etl_wam_job_control_log") \
+    .option("user", username) \
+    .option("password", password) \
+    .load()
+
+wam_nuc_log_job_controlDF.filter(wam_nuc_log_job_controlDF.Target_table_name == 'contract')
+job.commit()
